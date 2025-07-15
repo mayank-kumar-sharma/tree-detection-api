@@ -1,11 +1,4 @@
-services:
-  - type: web
-    name: tree-detection-api
-    env: python
-    plan: free
-    buildCommand: |
-      apt-get update && apt-get install -y libgl1 python3-distutils
-      pip install --upgrade pip setuptools wheel
-      pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port 8000
+runtime: python
+buildCommand: pip install -r requirements.txt
+startCommand: uvicorn main:app --host 0.0.0.0 --port 8000
 
