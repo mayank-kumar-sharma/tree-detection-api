@@ -1,7 +1,4 @@
-setuptools>=68.0
-wheel
-pip>=23.2
-numpy>=1.24,<1.25
+numpy==1.23.5
 fastapi
 uvicorn
 ultralytics==8.1.0
