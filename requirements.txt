@@ -1,4 +1,7 @@
-numpy==1.23.5
+setuptools>=68.0
+wheel
+pip>=23.2
+numpy==1.24.4
 fastapi
 uvicorn
 ultralytics==8.1.0
@@ -8,5 +11,6 @@ Pillow
 torch==2.0.1+cpu
 torchvision==0.15.2+cpu
 -f https://download.pytorch.org/whl/cpu/torch_stable.html
+shapely
 
 
