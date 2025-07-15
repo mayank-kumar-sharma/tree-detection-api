@@ -8,7 +8,7 @@ ultralytics==8.1.0
 opencv-python-headless==4.7.0.72
 matplotlib
 Pillow
-numpy==1.24.4 --only-binary=:all:
+numpy>=1.24,<1.25
 pandas
 torch==2.0.1+cpu
 torchvision==0.15.2+cpu
