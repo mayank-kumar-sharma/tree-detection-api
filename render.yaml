@@ -1,4 +1,6 @@
+runtime: python
 buildCommand: |
-  apt-get update && apt-get install -y python3-distutils
-  pip install --upgrade pip setuptools wheel
+  apt-get update && apt-get install -y python3-distutils libgl1
+  pip install --upgrade pip setuptools==68.2.2 wheel
   pip install -r requirements.txt
+startCommand: uvicorn main:app --host 0.0.0.0 --port 8000
