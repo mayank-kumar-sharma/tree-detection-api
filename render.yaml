@@ -1,11 +1,8 @@
-runtime: python
-pythonVersion: 3.10.13
-
-buildCommand: |
-  apt-get update && \
-  apt-get install -y python3-distutils libgl1 libglib2.0-0 && \
-  pip install --upgrade pip setuptools==68.2.2 wheel && \
-  pip install -r requirements.txt
+# render.yaml
+build:
+  docker:
+    file: Dockerfile
 
 startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+
 
