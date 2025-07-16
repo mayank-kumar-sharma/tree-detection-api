@@ -25,7 +25,7 @@ app.add_middleware(
 )
 
 # Load YOLOv8 model
-model = YOLO("deetection.pt")  # Make sure this file is present in the same directory
+model = YOLO("deetection.pt")  # Ensure this file is in the same directory
 
 @app.post("/predict")
 async def predict(
@@ -36,12 +36,10 @@ async def predict(
         # Load image
         image_bytes = await file.read()
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
-        temp_path = "temp_input.jpg"
-        image.save(temp_path)  # Save directly using PIL
+        image_np = np.array(image)
+        image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-
-        # Parse polygon (if provided)
-        mask = None
+        # Apply polygon mask if provided
         if polygon_json:
             try:
                 polygon_points = json.loads(polygon_json)
@@ -55,7 +53,7 @@ async def predict(
             except Exception as e:
                 return JSONResponse(status_code=400, content={"error": f"Invalid polygon format: {e}"})
 
-        # Save temporarily
+        # Save image temporarily
         temp_path = "temp_input.jpg"
         cv2.imwrite(temp_path, image_bgr)
 
@@ -76,9 +74,9 @@ async def predict(
         for i, box in enumerate(boxes):
             x1, y1, x2, y2 = box
 
-            # If polygon is used, skip trees outside polygon
-            if mask is not None:
-                center_x, center_y = int((x1+x2)/2), int((y1+y2)/2)
+            # Skip trees outside polygon (if mask exists)
+            if polygon_json:
+                center_x, center_y = int((x1 + x2) / 2), int((y1 + y2) / 2)
                 if mask[center_y, center_x] == 0:
                     continue
 
@@ -113,4 +111,5 @@ async def predict(
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
