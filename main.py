@@ -36,8 +36,9 @@ async def predict(
         # Load image
         image_bytes = await file.read()
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
-        image_np = np.array(image)
-        image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+        temp_path = "temp_input.jpg"
+        image.save(temp_path)  # Save directly using PIL
+
 
         # Parse polygon (if provided)
         mask = None
