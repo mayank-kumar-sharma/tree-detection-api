@@ -72,7 +72,7 @@ async def predict(
         co2_total = 0
         class_counts = defaultdict(int)
 
-        size_map = {"S": (0, 400000), "M": (400000, 800000), "L": (800001, float("inf"))}
+        size_map = {"S": (0, 10000), "M": (10000, 20000), "L": (20001, float("inf"))}
         co2_map = {"S": 10, "M": 20, "L": 30}
         maturity_map = {"S": "likely young", "M": "semi-mature", "L": "mature"}
 
@@ -86,7 +86,7 @@ async def predict(
                     continue
 
             bbox_area = (x2 - x1) * (y2 - y1)
-            size_class = "L" if bbox_area > 800000 else "M" if bbox_area > 400000 else "S"
+            size_class = "L" if bbox_area > 20000 else "M" if bbox_area > 10000 else "S"
             co2 = co2_map[size_class]
             maturity = maturity_map[size_class]
 
