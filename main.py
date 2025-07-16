@@ -39,6 +39,11 @@ async def predict(
         image_np = np.array(image)
         image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
+       # Save for detection (high quality)
+        temp_path = "temp_input.jpg"
+        cv2.imwrite(temp_path, image_bgr)
+
+
         # Apply polygon mask if provided
         if polygon_json:
             try:
