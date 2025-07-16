@@ -1,8 +1,9 @@
-# render.yaml
-build:
-  docker:
-    file: Dockerfile
+services:
+  - name: tree-detection-api            # match your service name
+    type: web
+    env: docker
+    dockerfilePath: Dockerfile
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
 
-startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
 
 
