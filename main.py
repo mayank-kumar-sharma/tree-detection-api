@@ -4,7 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 import cv2
 import numpy as np
-import pandas as pd
 from PIL import Image
 import os
 from collections import defaultdict
@@ -12,7 +11,6 @@ from io import BytesIO
 import json
 from typing import Optional
 from shapely.geometry import Point, Polygon
-import zipfile
 
 app = FastAPI()
 
@@ -57,8 +55,6 @@ async def predict(
         # Save temp image
         temp_path = "temp_input.jpg"
         result_img_path = "result.jpg"
-        csv_path = "report.csv"
-        zip_path = "report.zip"
         cv2.imwrite(temp_path, image_bgr)
 
         # Run detection
@@ -74,7 +70,6 @@ async def predict(
         co2_total = 0
         class_counts = defaultdict(int)
 
-        size_map = {"S": (0, 10000), "M": (10000, 20000), "L": (20001, float("inf"))}
         co2_map = {"S": 10, "M": 20, "L": 30}
         maturity_map = {"S": "likely young", "M": "semi-mature", "L": "mature"}
 
@@ -112,15 +107,6 @@ async def predict(
         # Save result image
         cv2.imwrite(result_img_path, annotated_image)
 
-        # Save CSV report
-        df = pd.DataFrame(output_data)
-        df.to_csv(csv_path, index=False)
-
-        # Create ZIP
-        with zipfile.ZipFile(zip_path, "w") as zipf:
-            zipf.write(csv_path)
-            zipf.write(result_img_path)
-
         # Clean up temp input
         if os.path.exists(temp_path):
             os.remove(temp_path)
@@ -131,9 +117,7 @@ async def predict(
             "average_canopy_area": round(np.mean(canopy_areas), 2) if canopy_areas else 0,
             "class_distribution": dict(class_counts),
             "trees": output_data,
-            "result_image": "/result.jpg",
-            "csv_report": "/report.csv",
-            "zip_report": "/download-report"
+            "result_image": "/result.jpg"
         })
 
     except Exception as e:
@@ -144,16 +128,3 @@ def get_result_image():
     if os.path.exists("result.jpg"):
         return FileResponse("result.jpg", media_type="image/jpeg")
     return JSONResponse(status_code=404, content={"error": "No result image found."})
-
-@app.get("/report.csv")
-def get_csv():
-    if os.path.exists("report.csv"):
-        return FileResponse("report.csv", media_type="text/csv", filename="report.csv")
-    return JSONResponse(status_code=404, content={"error": "CSV report not found."})
-
-@app.get("/download-report")
-def download_zip():
-    if os.path.exists("report.zip"):
-        return FileResponse("report.zip", media_type="application/zip", filename="report.zip")
-    return JSONResponse(status_code=404, content={"error": "ZIP report not found."})
-
