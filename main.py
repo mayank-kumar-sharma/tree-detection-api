@@ -10,13 +10,12 @@ import os
 from collections import defaultdict
 from io import BytesIO
 import json
+import base64
 from typing import Optional
 from shapely.geometry import Point, Polygon
-import base64
 
 app = FastAPI()
 
-# Allow CORS for frontend integration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,7 +24,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Load YOLOv8 model
 model = YOLO("deetection.pt")  # Ensure this file is in the same directory
 
 @app.post("/predict")
@@ -34,17 +32,14 @@ async def predict(
     polygon_json: Optional[str] = Form(None)
 ):
     try:
-        # Load image
         image_bytes = await file.read()
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
         image_np = np.array(image)
         image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-        # Save for detection (high quality)
         temp_path = "temp_input.jpg"
         cv2.imwrite(temp_path, image_bgr)
 
-        # Apply polygon mask if provided
         if polygon_json:
             try:
                 polygon_points = json.loads(polygon_json)
@@ -58,15 +53,12 @@ async def predict(
             except Exception as e:
                 return JSONResponse(status_code=400, content={"error": f"Invalid polygon format: {e}"})
 
-        # Save image temporarily
         temp_path = "temp_input.jpg"
         cv2.imwrite(temp_path, image_bgr)
 
-        # Run detection
         results = model(temp_path)[0]
         boxes = results.boxes.xyxy.cpu().numpy().astype(int)
 
-        # Initialize results
         output_data = []
         canopy_areas = []
         co2_total = 0
@@ -78,12 +70,10 @@ async def predict(
 
         for i, box in enumerate(boxes):
             x1, y1, x2, y2 = box
+            center_x, center_y = int((x1 + x2) / 2), int((y1 + y2) / 2)
 
-            # Skip trees outside polygon (if mask exists)
-            if polygon_json:
-                center_x, center_y = int((x1 + x2) / 2), int((y1 + y2) / 2)
-                if mask[center_y, center_x] == 0:
-                    continue
+            if polygon_json and mask[center_y, center_x] == 0:
+                continue
 
             bbox_area = (x2 - x1) * (y2 - y1)
             size_class = "L" if bbox_area > 20000 else "M" if bbox_area > 10000 else "S"
@@ -95,24 +85,23 @@ async def predict(
             canopy_areas.append(bbox_area)
 
             # Draw bounding box with label
-            label = f"{size_class} | {co2}kg CO₂"
-            cv2.rectangle(image_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
-            cv2.putText(image_bgr, label, (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+            color = (0, 255, 0)
+            cv2.rectangle(image_bgr, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(image_bgr, f"{size_class}", (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
             output_data.append({
-                "Tree #": i + 1,
+                "Tree #": len(output_data) + 1,
                 "Size": size_class,
                 "Maturity": maturity,
                 "CO2 (kg/year)": co2,
                 "Canopy Area (px^2)": int(bbox_area)
             })
 
-        # Encode annotated image to base64
-        _, buffer = cv2.imencode(".jpg", image_bgr)
-        img_base64 = base64.b64encode(buffer).decode("utf-8")
+        # Encode image with bounding boxes as base64
+        _, buffer = cv2.imencode('.jpg', image_bgr)
+        image_base64 = base64.b64encode(buffer).decode('utf-8')
 
-        # Clean up
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
@@ -122,10 +111,11 @@ async def predict(
             "average_canopy_area": round(np.mean(canopy_areas), 2) if canopy_areas else 0,
             "class_distribution": dict(class_counts),
             "trees": output_data,
-            "annotated_image_base64": img_base64
+            "image_base64": image_base64
         })
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 
