@@ -1,17 +1,16 @@
 from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from ultralytics import YOLO
-import cv2
-import numpy as np
-from PIL import Image
-import os
-from collections import defaultdict
-from io import BytesIO
-import json
-import base64
-from typing import Optional
 from shapely.geometry import Point, Polygon
+from PIL import Image
+import numpy as np
+import cv2
+import io
+import os
+import json
+from collections import defaultdict
+from typing import Optional
 
 app = FastAPI()
 
@@ -23,7 +22,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model = YOLO("deetection.pt")  # Make sure this model file exists
+model = YOLO("deetection.pt")  # Your trained model path
 
 @app.post("/predict")
 async def predict(
@@ -32,10 +31,11 @@ async def predict(
 ):
     try:
         image_bytes = await file.read()
-        image = Image.open(BytesIO(image_bytes)).convert("RGB")
+        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
         image_np = np.array(image)
         image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
+        # Create polygon mask if provided
         mask = None
         if polygon_json:
             try:
@@ -48,7 +48,7 @@ async def predict(
                             mask[y, x] = 255
                 image_bgr = cv2.bitwise_and(image_bgr, image_bgr, mask=mask)
             except Exception as e:
-                return JSONResponse(status_code=400, content={"error": f"Invalid polygon format: {e}"})
+                return StreamingResponse(io.BytesIO(f"Invalid polygon format: {e}".encode()), media_type="text/plain")
 
         temp_path = "temp_input.jpg"
         cv2.imwrite(temp_path, image_bgr)
@@ -65,7 +65,7 @@ async def predict(
         co2_map = {"S": 10, "M": 20, "L": 30}
         maturity_map = {"S": "likely young", "M": "semi-mature", "L": "mature"}
 
-        for i, box in enumerate(boxes):
+        for box in boxes:
             x1, y1, x2, y2 = box
             center_x, center_y = int((x1 + x2) / 2), int((y1 + y2) / 2)
 
@@ -95,24 +95,22 @@ async def predict(
                 "Canopy Area (px^2)": int(bbox_area)
             })
 
-        # Encode image with bounding boxes to base64
+        # Prepare output image for download
         _, buffer = cv2.imencode('.jpg', image_bgr)
-        image_base64 = base64.b64encode(buffer).decode('utf-8')
+        image_bytes = io.BytesIO(buffer.tobytes())
 
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
-        return JSONResponse(content={
-            "total_trees": len(output_data),
-            "total_co2_kg_per_year": co2_total,
-            "average_canopy_area": round(np.mean(canopy_areas), 2) if canopy_areas else 0,
-            "class_distribution": dict(class_counts),
-            "trees": output_data,
-            "image_base64": image_base64  # 🟢 included in response
-        })
+        return StreamingResponse(
+            image_bytes,
+            media_type="image/jpeg",
+            headers={"Content-Disposition": "attachment; filename=output_with_boxes.jpg"}
+        )
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        return StreamingResponse(io.BytesIO(f"Internal error: {str(e)}".encode()), media_type="text/plain")
+
 
 
 
