@@ -1,5 +1,5 @@
 from fastapi import FastAPI, File, UploadFile, Form
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 import cv2
@@ -12,10 +12,11 @@ from io import BytesIO
 import json
 from typing import Optional
 from shapely.geometry import Point, Polygon
+import zipfile
 
 app = FastAPI()
 
-# Allow CORS for frontend integration
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,7 +26,7 @@ app.add_middleware(
 )
 
 # Load YOLOv8 model
-model = YOLO("deetection.pt")  # Ensure this file is in the same directory
+model = YOLO("deetection.pt")  # Ensure this file is present
 
 @app.post("/predict")
 async def predict(
@@ -33,18 +34,13 @@ async def predict(
     polygon_json: Optional[str] = Form(None)
 ):
     try:
-        # Load image
+        # Load and prepare image
         image_bytes = await file.read()
         image = Image.open(BytesIO(image_bytes)).convert("RGB")
         image_np = np.array(image)
         image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-       # Save for detection (high quality)
-        temp_path = "temp_input.jpg"
-        cv2.imwrite(temp_path, image_bgr)
-
-
-        # Apply polygon mask if provided
+        # Optional polygon mask
         if polygon_json:
             try:
                 polygon_points = json.loads(polygon_json)
@@ -58,15 +54,21 @@ async def predict(
             except Exception as e:
                 return JSONResponse(status_code=400, content={"error": f"Invalid polygon format: {e}"})
 
-        # Save image temporarily
+        # Save temp image
         temp_path = "temp_input.jpg"
+        result_img_path = "result.jpg"
+        csv_path = "report.csv"
+        zip_path = "report.zip"
         cv2.imwrite(temp_path, image_bgr)
 
         # Run detection
         results = model(temp_path)[0]
         boxes = results.boxes.xyxy.cpu().numpy().astype(int)
 
-        # Initialize results
+        # Annotate image
+        annotated_image = image_bgr.copy()
+
+        # Output vars
         output_data = []
         canopy_areas = []
         co2_total = 0
@@ -79,10 +81,9 @@ async def predict(
         for i, box in enumerate(boxes):
             x1, y1, x2, y2 = box
 
-            # Skip trees outside polygon (if mask exists)
             if polygon_json:
-                center_x, center_y = int((x1 + x2) / 2), int((y1 + y2) / 2)
-                if mask[center_y, center_x] == 0:
+                cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
+                if mask[cy, cx] == 0:
                     continue
 
             bbox_area = (x2 - x1) * (y2 - y1)
@@ -102,7 +103,25 @@ async def predict(
                 "Canopy Area (px^2)": int(bbox_area)
             })
 
-        # Clean up
+            # Draw box and label
+            color = (0, 255, 0) if size_class == "S" else (0, 165, 255) if size_class == "M" else (0, 0, 255)
+            label = f"{size_class}, {co2}kg"
+            cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 2)
+            cv2.putText(annotated_image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
+
+        # Save result image
+        cv2.imwrite(result_img_path, annotated_image)
+
+        # Save CSV report
+        df = pd.DataFrame(output_data)
+        df.to_csv(csv_path, index=False)
+
+        # Create ZIP
+        with zipfile.ZipFile(zip_path, "w") as zipf:
+            zipf.write(csv_path)
+            zipf.write(result_img_path)
+
+        # Clean up temp input
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
@@ -111,15 +130,30 @@ async def predict(
             "total_co2_kg_per_year": co2_total,
             "average_canopy_area": round(np.mean(canopy_areas), 2) if canopy_areas else 0,
             "class_distribution": dict(class_counts),
-            "trees": output_data
+            "trees": output_data,
+            "result_image": "/result.jpg",
+            "csv_report": "/report.csv",
+            "zip_report": "/download-report"
         })
 
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})  
+        return JSONResponse(status_code=500, content={"error": str(e)})
 
+@app.get("/result.jpg")
+def get_result_image():
+    if os.path.exists("result.jpg"):
+        return FileResponse("result.jpg", media_type="image/jpeg")
+    return JSONResponse(status_code=404, content={"error": "No result image found."})
 
+@app.get("/report.csv")
+def get_csv():
+    if os.path.exists("report.csv"):
+        return FileResponse("report.csv", media_type="text/csv", filename="report.csv")
+    return JSONResponse(status_code=404, content={"error": "CSV report not found."})
 
-
-
-
+@app.get("/download-report")
+def download_zip():
+    if os.path.exists("report.zip"):
+        return FileResponse("report.zip", media_type="application/zip", filename="report.zip")
+    return JSONResponse(status_code=404, content={"error": "ZIP report not found."})
 
