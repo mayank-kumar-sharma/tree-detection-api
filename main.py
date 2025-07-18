@@ -4,7 +4,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from ultralytics import YOLO
 import cv2
 import numpy as np
-import pandas as pd
 from PIL import Image
 import os
 from collections import defaultdict
@@ -24,7 +23,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model = YOLO("deetection.pt")  # Ensure this file is in the same directory
+model = YOLO("deetection.pt")  # Make sure this model file exists
 
 @app.post("/predict")
 async def predict(
@@ -37,9 +36,7 @@ async def predict(
         image_np = np.array(image)
         image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-        temp_path = "temp_input.jpg"
-        cv2.imwrite(temp_path, image_bgr)
-
+        mask = None
         if polygon_json:
             try:
                 polygon_points = json.loads(polygon_json)
@@ -72,7 +69,7 @@ async def predict(
             x1, y1, x2, y2 = box
             center_x, center_y = int((x1 + x2) / 2), int((y1 + y2) / 2)
 
-            if polygon_json and mask[center_y, center_x] == 0:
+            if mask is not None and mask[center_y, center_x] == 0:
                 continue
 
             bbox_area = (x2 - x1) * (y2 - y1)
@@ -84,7 +81,7 @@ async def predict(
             class_counts[size_class] += 1
             canopy_areas.append(bbox_area)
 
-            # Draw bounding box with label
+            # Draw bounding box
             color = (0, 255, 0)
             cv2.rectangle(image_bgr, (x1, y1), (x2, y2), color, 2)
             cv2.putText(image_bgr, f"{size_class}", (x1, y1 - 10),
@@ -98,7 +95,7 @@ async def predict(
                 "Canopy Area (px^2)": int(bbox_area)
             })
 
-        # Encode image with bounding boxes as base64
+        # Encode image with bounding boxes to base64
         _, buffer = cv2.imencode('.jpg', image_bgr)
         image_base64 = base64.b64encode(buffer).decode('utf-8')
 
@@ -111,11 +108,12 @@ async def predict(
             "average_canopy_area": round(np.mean(canopy_areas), 2) if canopy_areas else 0,
             "class_distribution": dict(class_counts),
             "trees": output_data,
-            "image_base64": image_base64
+            "image_base64": image_base64  # 🟢 included in response
         })
 
     except Exception as e:
         return JSONResponse(status_code=500, content={"error": str(e)})
+
 
 
 
