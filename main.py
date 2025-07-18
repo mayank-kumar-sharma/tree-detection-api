@@ -1,18 +1,16 @@
-from fastapi import FastAPI, File, UploadFile, Form
+from fastapi import FastAPI, File, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from ultralytics import YOLO
-from shapely.geometry import Point, Polygon
-from PIL import Image
-import numpy as np
-import cv2
+from PIL import Image, ImageDraw
 import io
-import os
+import torch
 import json
-from collections import defaultdict
-from typing import Optional
+import zipfile
 
 app = FastAPI()
+
+model = YOLO("detection.pt")  # Load your trained detection model
 
 app.add_middleware(
     CORSMiddleware,
@@ -22,94 +20,74 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-model = YOLO("deetection.pt")  # Your trained model path
+def draw_bounding_boxes(image: Image.Image, boxes):
+    draw = ImageDraw.Draw(image)
+    for box in boxes:
+        x1, y1, x2, y2 = map(int, box[:4])
+        draw.rectangle([x1, y1, x2, y2], outline="red", width=3)
+    return image
 
 @app.post("/predict")
-async def predict(
-    file: UploadFile = File(...),
-    polygon_json: Optional[str] = Form(None)
-):
-    try:
-        image_bytes = await file.read()
-        image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        image_np = np.array(image)
-        image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
+async def predict(file: UploadFile = File(...)):
+    contents = await file.read()
+    image = Image.open(io.BytesIO(contents)).convert("RGB")
 
-        # Create polygon mask if provided
-        mask = None
-        if polygon_json:
-            try:
-                polygon_points = json.loads(polygon_json)
-                polygon = Polygon(polygon_points)
-                mask = np.zeros(image_np.shape[:2], dtype=np.uint8)
-                for y in range(mask.shape[0]):
-                    for x in range(mask.shape[1]):
-                        if polygon.contains(Point(x, y)):
-                            mask[y, x] = 255
-                image_bgr = cv2.bitwise_and(image_bgr, image_bgr, mask=mask)
-            except Exception as e:
-                return StreamingResponse(io.BytesIO(f"Invalid polygon format: {e}".encode()), media_type="text/plain")
+    # Run detection
+    results = model.predict(image, conf=0.25)
+    boxes = results[0].boxes.xyxy.cpu().numpy() if results[0].boxes else []
 
-        temp_path = "temp_input.jpg"
-        cv2.imwrite(temp_path, image_bgr)
+    # Draw bounding boxes on the image
+    image_with_boxes = draw_bounding_boxes(image.copy(), boxes)
+    img_byte_arr = io.BytesIO()
+    image_with_boxes.save(img_byte_arr, format='JPEG')
+    img_byte_arr.seek(0)
 
-        results = model(temp_path)[0]
-        boxes = results.boxes.xyxy.cpu().numpy().astype(int)
+    # Build JSON result
+    json_data = []
+    for box in boxes:
+        x1, y1, x2, y2 = map(int, box[:4])
+        width, height = x2 - x1, y2 - y1
+        area = width * height
 
-        output_data = []
-        canopy_areas = []
-        co2_total = 0
-        class_counts = defaultdict(int)
+        if area <= 10000:
+            size = "Small"
+            maturity = "Likely Young"
+            co2 = 10
+        elif area <= 20000:
+            size = "Medium"
+            maturity = "Semi-Mature"
+            co2 = 20
+        else:
+            size = "Large"
+            maturity = "Mature"
+            co2 = 30
 
-        size_map = {"S": (0, 10000), "M": (10000, 20000), "L": (20001, float("inf"))}
-        co2_map = {"S": 10, "M": 20, "L": 30}
-        maturity_map = {"S": "likely young", "M": "semi-mature", "L": "mature"}
+        json_data.append({
+            "bbox": [x1, y1, x2, y2],
+            "canopy_area": int(area),
+            "size": size,
+            "maturity": maturity,
+            "estimated_CO2_kg": co2
+        })
 
-        for box in boxes:
-            x1, y1, x2, y2 = box
-            center_x, center_y = int((x1 + x2) / 2), int((y1 + y2) / 2)
+    summary = {
+        "total_trees": len(json_data),
+        "total_canopy_area": sum(obj["canopy_area"] for obj in json_data),
+        "total_CO2_kg": sum(obj["estimated_CO2_kg"] for obj in json_data),
+        "trees": json_data
+    }
 
-            if mask is not None and mask[center_y, center_x] == 0:
-                continue
+    # Prepare ZIP file containing image + JSON
+    zip_io = io.BytesIO()
+    with zipfile.ZipFile(zip_io, mode="w") as zf:
+        zf.writestr("output.jpg", img_byte_arr.getvalue())
+        zf.writestr("results.json", json.dumps(summary, indent=4))
+    zip_io.seek(0)
 
-            bbox_area = (x2 - x1) * (y2 - y1)
-            size_class = "L" if bbox_area > 20000 else "M" if bbox_area > 10000 else "S"
-            co2 = co2_map[size_class]
-            maturity = maturity_map[size_class]
+    return StreamingResponse(zip_io, media_type="application/x-zip-compressed", headers={
+        "Content-Disposition": "attachment; filename=tree_detection_output.zip"
+    })
 
-            co2_total += co2
-            class_counts[size_class] += 1
-            canopy_areas.append(bbox_area)
-
-            # Draw bounding box
-            color = (0, 255, 0)
-            cv2.rectangle(image_bgr, (x1, y1), (x2, y2), color, 2)
-            cv2.putText(image_bgr, f"{size_class}", (x1, y1 - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
-
-            output_data.append({
-                "Tree #": len(output_data) + 1,
-                "Size": size_class,
-                "Maturity": maturity,
-                "CO2 (kg/year)": co2,
-                "Canopy Area (px^2)": int(bbox_area)
-            })
-
-        # Prepare output image for download
-        _, buffer = cv2.imencode('.jpg', image_bgr)
-        image_bytes = io.BytesIO(buffer.tobytes())
-
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-
-        return StreamingResponse(
-            image_bytes,
-            media_type="image/jpeg",
-            headers={"Content-Disposition": "attachment; filename=output_with_boxes.jpg"}
-        )
-
-    except Exception as e:
-        return StreamingResponse(io.BytesIO(f"Internal error: {str(e)}".encode()), media_type="text/plain")
 
 
 
