@@ -12,6 +12,7 @@ from io import BytesIO
 import json
 from typing import Optional
 from shapely.geometry import Point, Polygon
+import base64
 
 app = FastAPI()
 
@@ -39,10 +40,9 @@ async def predict(
         image_np = np.array(image)
         image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-       # Save for detection (high quality)
+        # Save for detection (high quality)
         temp_path = "temp_input.jpg"
         cv2.imwrite(temp_path, image_bgr)
-
 
         # Apply polygon mask if provided
         if polygon_json:
@@ -94,6 +94,12 @@ async def predict(
             class_counts[size_class] += 1
             canopy_areas.append(bbox_area)
 
+            # Draw bounding box with label
+            label = f"{size_class} | {co2}kg CO₂"
+            cv2.rectangle(image_bgr, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.putText(image_bgr, label, (x1, y1 - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
             output_data.append({
                 "Tree #": i + 1,
                 "Size": size_class,
@@ -101,6 +107,10 @@ async def predict(
                 "CO2 (kg/year)": co2,
                 "Canopy Area (px^2)": int(bbox_area)
             })
+
+        # Encode annotated image to base64
+        _, buffer = cv2.imencode(".jpg", image_bgr)
+        img_base64 = base64.b64encode(buffer).decode("utf-8")
 
         # Clean up
         if os.path.exists(temp_path):
@@ -111,7 +121,8 @@ async def predict(
             "total_co2_kg_per_year": co2_total,
             "average_canopy_area": round(np.mean(canopy_areas), 2) if canopy_areas else 0,
             "class_distribution": dict(class_counts),
-            "trees": output_data
+            "trees": output_data,
+            "annotated_image_base64": img_base64
         })
 
     except Exception as e:
