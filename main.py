@@ -38,12 +38,17 @@ async def predict(
         image_np = np.array(image)
         image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-        # Optional polygon filtering setup
-        polygon = None
+        # Optional polygon mask
         if polygon_json:
             try:
                 polygon_points = json.loads(polygon_json)
                 polygon = Polygon(polygon_points)
+                mask = np.zeros(image_np.shape[:2], dtype=np.uint8)
+                for y in range(mask.shape[0]):
+                    for x in range(mask.shape[1]):
+                        if polygon.contains(Point(x, y)):
+                            mask[y, x] = 255
+                image_bgr = cv2.bitwise_and(image_bgr, image_bgr, mask=mask)
             except Exception as e:
                 return JSONResponse(status_code=400, content={"error": f"Invalid polygon format: {e}"})
 
@@ -52,14 +57,14 @@ async def predict(
         result_img_path = "result.jpg"
         cv2.imwrite(temp_path, image_bgr)
 
-        # Run YOLO detection
+        # Run detection
         results = model(temp_path)[0]
         boxes = results.boxes.xyxy.cpu().numpy().astype(int)
 
-        # Annotated result
+        # Annotate image
         annotated_image = image_bgr.copy()
 
-        # Output accumulators
+        # Output vars
         output_data = []
         canopy_areas = []
         co2_total = 0
@@ -71,13 +76,11 @@ async def predict(
         for i, box in enumerate(boxes):
             x1, y1, x2, y2 = box
 
-            # Centroid-based polygon filter
-            if polygon:
+            if polygon_json:
                 cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
-                if not polygon.contains(Point(cx, cy)):
+                if mask[cy, cx] == 0:
                     continue
 
-            # Tree classification
             bbox_area = (x2 - x1) * (y2 - y1)
             size_class = "L" if bbox_area > 20000 else "M" if bbox_area > 10000 else "S"
             co2 = co2_map[size_class]
@@ -95,15 +98,16 @@ async def predict(
                 "Canopy Area (px^2)": int(bbox_area)
             })
 
-            # Draw box
+            # Draw box and label
             color = (0, 255, 0) if size_class == "S" else (0, 165, 255) if size_class == "M" else (0, 0, 255)
             label = f"{size_class}, {co2}kg"
             cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 2)
             cv2.putText(annotated_image, label, (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, color, 2)
 
-        # Save final annotated result
+        # Save result image
         cv2.imwrite(result_img_path, annotated_image)
 
+        # Clean up temp input
         if os.path.exists(temp_path):
             os.remove(temp_path)
 
