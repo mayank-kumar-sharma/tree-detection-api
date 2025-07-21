@@ -39,6 +39,7 @@ async def predict(
         image_bgr = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
         # Optional polygon mask
+        mask = None
         if polygon_json:
             try:
                 polygon_points = json.loads(polygon_json)
@@ -61,11 +62,9 @@ async def predict(
         results = model(temp_path)[0]
         boxes = results.boxes.xyxy.cpu().numpy().astype(int)
 
-        # Annotate image
-        annotated_image = image_bgr.copy()
-
-        # Output vars
+        # Prepare output vars
         output_data = []
+        filtered_boxes = []
         canopy_areas = []
         co2_total = 0
         class_counts = defaultdict(int)
@@ -76,10 +75,11 @@ async def predict(
         for i, box in enumerate(boxes):
             x1, y1, x2, y2 = box
 
-            if polygon_json:
+            # Check if box center is inside the mask/polygon (if polygon was provided)
+            if mask is not None:
                 cx, cy = int((x1 + x2) / 2), int((y1 + y2) / 2)
                 if mask[cy, cx] == 0:
-                    continue
+                    continue  # Skip boxes outside the polygon
 
             bbox_area = (x2 - x1) * (y2 - y1)
             size_class = "L" if bbox_area > 20000 else "M" if bbox_area > 10000 else "S"
@@ -90,15 +90,18 @@ async def predict(
             class_counts[size_class] += 1
             canopy_areas.append(bbox_area)
 
+            filtered_boxes.append((x1, y1, x2, y2, size_class, co2))
             output_data.append({
-                "Tree #": i + 1,
+                "Tree #": len(output_data) + 1,
                 "Size": size_class,
                 "Maturity": maturity,
                 "CO2 (kg/year)": co2,
                 "Canopy Area (px^2)": int(bbox_area)
             })
 
-            # Draw box and label
+        # Annotate image (only for filtered trees)
+        annotated_image = image_bgr.copy()
+        for i, (x1, y1, x2, y2, size_class, co2) in enumerate(filtered_boxes):
             color = (0, 255, 0) if size_class == "S" else (0, 165, 255) if size_class == "M" else (0, 0, 255)
             label = f"{size_class}, {co2}kg"
             cv2.rectangle(annotated_image, (x1, y1), (x2, y2), color, 2)
@@ -128,4 +131,3 @@ def get_result_image():
     if os.path.exists("result.jpg"):
         return FileResponse("result.jpg", media_type="image/jpeg")
     return JSONResponse(status_code=404, content={"error": "No result image found."})
-
